@@ -1,0 +1,88 @@
+import hashlib
+import hmac
+import datetime
+import requests
+
+# ========= Required: Your AK / SK =========
+access_key = 'your-ak-here'
+secret_key = 'your-sk-here'
+
+# ========= Fixed parameters =========
+region = 'ap-southeast-1'
+service = 'tos'
+host = f'tos-{region}.bytepluses.com'
+endpoint = f'https://{host}/'
+request_method = 'GET'
+request_path = '/'
+payload = ''  # No body for ListBuckets
+
+# ========= Time info =========
+t = datetime.datetime.utcnow()
+amz_date = t.strftime('%Y%m%dT%H%M%SZ')        # e.g. 20250507T123456Z
+datestamp = t.strftime('%Y%m%d')               # e.g. 20250507
+
+# ========= Step 1: Build Canonical Request =========
+canonical_uri = request_path
+canonical_querystring = ''
+canonical_headers = (
+    f'host:{host}\n'
+    f'x-tos-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n'
+    f'x-tos-date:{amz_date}\n'
+)
+signed_headers = 'host;x-tos-content-sha256;x-tos-date'
+hashed_payload = hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+canonical_request = (
+    f'{request_method}\n'
+    f'{canonical_uri}\n'
+    f'{canonical_querystring}\n'
+    f'{canonical_headers}\n'
+    f'{signed_headers}\n'
+    f'{hashed_payload}'
+)
+
+# ========= Step 2: Build String to Sign =========
+algorithm = 'TOS4-HMAC-SHA256'
+credential_scope = f'{datestamp}/{region}/{service}/request'
+hashed_canonical_request = hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()
+
+string_to_sign = (
+    f'{algorithm}\n'
+    f'{amz_date}\n'
+    f'{credential_scope}\n'
+    f'{hashed_canonical_request}'
+)
+
+# ========= Step 3: Calculate Signature =========
+def sign(key, msg):
+    return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+
+k_secret = secret_key.encode('utf-8')
+k_date = sign(k_secret, datestamp)
+k_region = sign(k_date, region)
+k_service = sign(k_region, service)
+k_signing = sign(k_service, 'request')
+
+signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+
+# ========= Step 4: Construct Authorization Header =========
+authorization_header = (
+    f'{algorithm} '
+    f'Credential={access_key}/{credential_scope}, '
+    f'SignedHeaders={signed_headers}, '
+    f'Signature={signature}'
+)
+
+# ========= Step 5: Send the request =========
+headers = {
+    'Host': host,
+    'x-tos-date': amz_date,
+    'x-tos-content-sha256': hashed_payload,
+    'Authorization': authorization_header
+}
+
+response = requests.get(endpoint, headers=headers)
+
+# ========= Step 6: Print result =========
+print('Status Code:', response.status_code)
+print('Response Body:', response.text)
