@@ -1,0 +1,144 @@
+import datetime
+import hashlib
+import hmac
+import json
+from urllib.parse import quote
+
+import requests
+
+Service = "waf"
+Version = "2023-12-25"
+Region = "byteplus-global"
+Endpoint = "https://waf.byteplusapi.com"
+ContentType = "application/json"
+
+AK = ""
+SK = ""
+
+
+def norm_query(params):
+    query = ""
+    for key in sorted(params.keys()):
+        value = params[key]
+        query += (
+            quote(str(key), safe="-_.~")
+            + "="
+            + quote(str(value), safe="-_.~")
+            + "&"
+        )
+    return query[:-1]
+
+
+def hmac_sha256(key: bytes, content: str):
+    return hmac.new(
+        key,
+        content.encode("utf-8"),
+        hashlib.sha256
+    ).digest()
+
+
+def hash_sha256(content: str):
+    return hashlib.sha256(
+        content.encode("utf-8")
+    ).hexdigest()
+
+
+def signed_request(action, body, method="POST"):
+    now = datetime.datetime.utcnow()
+    x_date = now.strftime("%Y%m%dT%H%M%SZ")
+    short_date = x_date[:8]
+
+    query = {
+        "Action": action,
+        "Version": Version
+    }
+
+    body_str = json.dumps(body, separators=(",", ":"))
+    x_content_sha256 = hash_sha256(body_str)
+
+    signed_headers = "content-type;x-content-sha256;x-date"
+
+    canonical_request = "\n".join([
+        method,
+        "/",
+        norm_query(query),
+        "\n".join([
+            f"content-type:{ContentType}",
+            f"x-content-sha256:{x_content_sha256}",
+            f"x-date:{x_date}",
+        ]),
+        "",
+        signed_headers,
+        x_content_sha256
+    ])
+
+    hashed_canonical_request = hash_sha256(canonical_request)
+
+    credential_scope = f"{short_date}/{Region}/{Service}/request"
+
+    string_to_sign = "\n".join([
+        "HMAC-SHA256",
+        x_date,
+        credential_scope,
+        hashed_canonical_request
+    ])
+
+    k_date = hmac_sha256(SK.encode("utf-8"), short_date)
+    k_region = hmac_sha256(k_date, Region)
+    k_service = hmac_sha256(k_region, Service)
+    k_signing = hmac_sha256(k_service, "request")
+
+    signature = hmac_sha256(k_signing, string_to_sign).hex()
+
+    authorization = (
+        "HMAC-SHA256 "
+        f"Credential={AK}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, "
+        f"Signature={signature}"
+    )
+
+    headers = {
+        "Content-Type": ContentType,
+        "X-Date": x_date,
+        "X-Content-Sha256": x_content_sha256,
+        "Authorization": authorization,
+    }
+
+    response = requests.request(
+        method=method,
+        url=Endpoint,
+        headers=headers,
+        params=query,
+        data=body_str,
+        timeout=30
+    )
+
+    print(response.status_code)
+    print(response.text)
+
+    return response.json()
+
+
+if __name__ == "__main__":
+    body = {
+        "Name": "api-test-cc-rule",
+        "Host": "bpp.chenliming.cn",
+        "Url": "/",
+        "Field": "HEADER:User-Agent",
+        "CountTime": 10,
+        "SingleThreshold": 12,
+        "PathThreshold": 12,
+        "CCType": 2,
+        "EffectTime": 13,
+        "RulePriority": 1,
+        "Enable": 1,
+        "CronEnable": 0,
+        "CustomResponsePageID": "45"
+    }
+
+    result = signed_request(
+        action="CreateCCRule",
+        body=body
+    )
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
